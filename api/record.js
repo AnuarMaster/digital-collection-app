@@ -1,107 +1,71 @@
 // api/record.js
-// Vercel serverless function to broadcast a signed Ethereum transaction
-// that includes your hash in the data field using Tatum's Ethereum mainnet gateway.
+import { ethers } from "ethers";
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
     return;
   }
 
   const { hash } = req.body;
   if (!hash) {
-    res.status(400).json({ error: 'Missing hash in request body.' });
+    res.status(400).json({ error: "Missing hash in request body." });
     return;
   }
 
-  // Retrieve your Tatum API key from environment variables
+  // Retrieve your Tatum API key from environment variables.
   const tatumApiKey = process.env.TATUM_API_KEY;
   if (!tatumApiKey) {
-    res.status(500).json({ error: 'Tatum API key is not set.' });
+    res.status(500).json({ error: "Tatum API key is not set." });
     return;
   }
 
-  // For demonstration purposes, we assume you have these environment variables set:
-  // - ETH_FROM_ADDRESS: the sender address
-  // - ETH_TO_ADDRESS: the recipient address (could be your own address for anchoring)
-  // - ETH_PRIVATE_KEY: the private key used to sign the transaction (handle securely!)
-  const fromAddress = process.env.ETH_FROM_ADDRESS;
-  const toAddress = process.env.ETH_TO_ADDRESS;
-  const privateKey = process.env.ETH_PRIVATE_KEY; // NEVER expose this key publicly
-
-  if (!fromAddress || !toAddress || !privateKey) {
-    res.status(500).json({ error: 'Ethereum configuration is incomplete.' });
-    return;
-  }
-
-  // Construct the transaction payload.
-  // This example creates a simple transaction with no value transfer.
-  // It embeds the hash in the data field.
-  const txPayload = {
-    from: fromAddress,
-    to: toAddress,
-    value: '0',               // No Ether is transferred
-    gasLimit: '21000',        // Basic gas limit (adjust as needed)
-    gasPrice: '20000000000',  // Example gas price (20 Gwei)
-    data: hash,               // Embed your hash here (as hex or a string)
-    chainId: 1                // Ethereum mainnet chain ID
-  };
-
-  // IMPORTANT: In production, you must sign the transaction using your private key.
-  // The signing process involves constructing the raw transaction, signing it, and
-  // serializing it into a hex string.
-  // For this example, we assume you have a function signTransaction that does this.
-  // Replace the following line with your actual signing implementation.
-  const signedTx = await signTransaction(txPayload, privateKey);
-  // The signedTx should be a hex string (e.g., "0x...")
-
-  // Broadcast the signed transaction using Tatum's Ethereum mainnet gateway
-  const TATUM_ETH_MAINNET_URL = 'https://ethereum-mainnet.gateway.tatum.io';
+  // Test credentials (for demonstration only)
+  const fromAddress = "0xf8c8Ce17E33fAe0730c8C279427281C4A7D47e5c"; // Sender address with 0.05 ETH
+  const toAddress = "0xA81c57B9f269b584523967B89fD390373Da6E37D";   // Receiver address (0 ETH)
+  const privateKey = "df5c402faa5164a90215e565164ed689efa222c7af942dd6d3f4b95cc001e089";
 
   try {
-    const tatumResponse = await fetch(TATUM_ETH_MAINNET_URL, {
-      method: 'POST',
+    // Create a provider that connects to Sepolia via Tatum's gateway.
+    const provider = new ethers.providers.JsonRpcProvider("https://ethereum-sepolia.gateway.tatum.io");
+
+    // Create a wallet instance using the provided private key.
+    const wallet = new ethers.Wallet(privateKey, provider);
+
+    // Get the current transaction count (nonce) for the sender address.
+    const nonce = await provider.getTransactionCount(fromAddress, "latest");
+
+    // Build the transaction.
+    // This transaction sends 0 ETH and embeds the provided hash in the data field.
+    const tx = {
+      from: fromAddress,
+      to: toAddress,
+      nonce: nonce,
+      value: ethers.utils.parseEther("0"), // No ETH is transferred.
+      gasLimit: 21000,                     // Basic gas limit.
+      gasPrice: ethers.utils.parseUnits("20", "gwei"), // Example gas price.
+      data: ethers.utils.hexlify(ethers.utils.toUtf8Bytes(hash)),
+      chainId: 11155111                    // Sepolia testnet chain ID.
+    };
+
+    // Sign the transaction.
+    const signedTx = await wallet.signTransaction(tx);
+
+    // Broadcast the signed transaction via Tatum’s broadcast endpoint.
+    const TATUM_BROADCAST_URL = "https://api.tatum.io/v3/ethereum/broadcast";
+    const response = await fetch(TATUM_BROADCAST_URL, {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': tatumApiKey
+        "Content-Type": "application/json",
+        "x-api-key": tatumApiKey,
+        "x-testnet-type": "ethereum-sepolia"
       },
-      body: JSON.stringify({
-        txData: signedTx // Tatum expects the signed transaction in the "txData" field
-      })
+      body: JSON.stringify({ txData: signedTx })
     });
 
-    const tatumData = await tatumResponse.json();
-    res.status(200).json(tatumData);
+    const data = await response.json();
+    res.status(200).json(data);
   } catch (error) {
     res.status(500).json({ error: error.toString() });
   }
-}
-
-/**
- * Dummy transaction signing function.
- * In a real-world application, you should use a robust library (such as ethers.js or web3.js)
- * to create, sign, and serialize your transaction.
- *
- * @param {Object} txPayload - The transaction payload.
- * @param {string} privateKey - The private key used to sign the transaction.
- * @returns {Promise<string>} - A promise that resolves to a signed transaction hex string.
- */
-async function signTransaction(txPayload, privateKey) {
-  // Example using ethers.js (make sure to add ethers to your dependencies)
-  // const { ethers } = require('ethers');
-  // const wallet = new ethers.Wallet(privateKey);
-  // const tx = {
-  //   to: txPayload.to,
-  //   value: ethers.BigNumber.from(txPayload.value),
-  //   gasLimit: ethers.BigNumber.from(txPayload.gasLimit),
-  //   gasPrice: ethers.BigNumber.from(txPayload.gasPrice),
-  //   data: txPayload.data,
-  //   nonce: await provider.getTransactionCount(txPayload.from, "latest"),
-  //   chainId: txPayload.chainId
-  // };
-  // const signedTx = await wallet.signTransaction(tx);
-  // return signedTx;
-
-  // For demonstration, we'll throw an error.
-  throw new Error("Transaction signing not implemented. Please implement signTransaction using ethers.js or web3.js.");
 }
